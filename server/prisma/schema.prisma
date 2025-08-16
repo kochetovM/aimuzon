@@ -1,0 +1,28 @@
+// Prisma schema for AI Muzon (SQLite)
+// To generate client: npx prisma generate
+// To migrate: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Favorite {
+  videoId      String  @id
+  title        String?
+  channelTitle String?
+  thumbnailUrl String?
+  publishedAt  String?
+  createdAt    DateTime @default(now())
+}
+
+model SearchEntry {
+  id  Int      @id @default(autoincrement())
+  q   String
+  at  DateTime @default(now())
+  @@index([at, q])
+}
