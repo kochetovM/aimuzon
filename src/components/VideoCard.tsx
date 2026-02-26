@@ -22,6 +22,7 @@ export const VideoCard: React.FC<{ item: VideoItem; onClick?: () => void }> = ({
   const isFav = useAppSelector(s => Boolean(s.favorites.byId[item.videoId]));
   const views = formatViews(item.viewCount);
   const { error: notifyError, success: notifySuccess } = useToast();
+  //The Play Video Module
 
   return (
     <div className="text-left w-full group">
