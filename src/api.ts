@@ -145,11 +145,9 @@ const getBaseUrl = (): string => {
 // Prefer client-side YouTube Data API if a public key is provided
 const getYouTubeKey = (): string => {
   // Prefer the new env var name, but keep backward compatibility with the old one
-  const primary = 'AIzaSyCQ4Iwikp5dSqAv2KKKjXXtQJzfbtC4gpY'; // for beta test(old AIzaSyBOpuIxi2TOpbw-QjeqdrwjLRiXLSrDPes), later: // process.env.REACT_APP_YOUTUBE_API_KEY;
-  console.log('REACT_APP_YOUTUBE_API_KEY', primary);
+  const primary = process.env.REACT_APP_YOUTUBE_API_KEY; // do not hardcode keys
   const legacy = process.env.REACT_APP_YT_API_KEY; // backward compatible
   const key = (primary || legacy || '').toString().trim();
-  // Do NOT hardcode any default key.
   return key;
 };
 
@@ -389,6 +387,32 @@ async function fetchYouTubeDirect(q: string, pageToken?: string, opts?: SearchOp
  * - Caches results in-memory and in sessionStorage (15 min TTL)
  * - Applies title blocklist, per-query seen ID dedupe
  */
+// Fetch via backend proxy when no client key is configured
+async function fetchViaProxy(q: string, pageToken?: string, opts?: SearchOptions): Promise<SearchResponse> {
+  const base = getBaseUrl();
+  const url = new URL(`${base}/api/search`);
+  url.searchParams.set('q', q);
+  const requested = typeof opts?.maxResults === 'number' ? opts.maxResults : 30;
+  const maxResults = Math.max(1, Math.min(30, requested));
+  url.searchParams.set('maxResults', String(maxResults));
+  url.searchParams.set('type', 'video');
+  url.searchParams.set('order', opts?.order ?? 'date');
+  if (opts?.publishedAfter) url.searchParams.set('publishedAfter', opts.publishedAfter);
+  if (opts?.publishedBefore) url.searchParams.set('publishedBefore', opts.publishedBefore);
+  if (opts?.videoCategoryId) url.searchParams.set('videoCategoryId', String(opts.videoCategoryId));
+  if (opts?.videoDuration) url.searchParams.set('videoDuration', opts.videoDuration);
+  if (typeof opts?.videoSyndicated === 'boolean' && opts.videoSyndicated) url.searchParams.set('videoSyndicated', 'true');
+  if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+  const resp = await fetch(url.toString());
+  if (!resp.ok) {
+    let body: any = null;
+    try { body = await resp.json(); } catch { body = await resp.text(); }
+    throw new Error(`Proxy search failed: ${resp.status} ${typeof body === 'string' ? body : (body?.error || '')}`);
+  }
+  return resp.json();
+}
+
 export async function fetchSearch(q: string, pageToken?: string, opts?: SearchOptions): Promise<SearchResponse> {
   // Sanitize query
   const qSan = (q || '').trim().replace(/\s+/g, ' ');
@@ -397,15 +421,17 @@ export async function fetchSearch(q: string, pageToken?: string, opts?: SearchOp
   // Normalize options (ISO UTC + defaults + validation)
   const normOpts = normalizeSearchOptions(opts);
 
-  // Always use direct YouTube API from the client (React-only)
-  const cacheKey = makeSearchKey({ q: qSan, pageToken, opts: normOpts, mode: 'yt' });
+  const hasClientKey = Boolean(getYouTubeKey());
+  const mode: 'yt' | 'proxy' = hasClientKey ? 'yt' : 'proxy';
+
+  const cacheKey = makeSearchKey({ q: qSan, pageToken, opts: normOpts, mode });
 
   // 1) In-memory cache first
   const cachedMem = searchCache.get(cacheKey);
   if (cachedMem) {
     const res = deepClone(cachedMem);
     res.cached = true;
-    console.log('[YouTube Search][cache:memory] hit', { q: qSan, pageToken: pageToken || null, opts: normOpts || {}, items: res.items?.length || 0 });
+    console.log(`[Search][cache:memory][${mode}] hit`, { q: qSan, pageToken: pageToken || null, opts: normOpts || {}, items: res.items?.length || 0 });
     return Promise.resolve(res);
   }
 
@@ -419,7 +445,7 @@ export async function fetchSearch(q: string, pageToken?: string, opts?: SearchOp
       if ((Date.now() - parsed.at) < MAX_AGE_MS) {
         const res = deepClone(parsed.data);
         res.cached = true;
-        console.log('[YouTube Search][cache:session] hit', { q: qSan, pageToken: pageToken || null, opts: normOpts || {}, items: res.items?.length || 0 });
+        console.log(`[Search][cache:session][${mode}] hit`, { q: qSan, pageToken: pageToken || null, opts: normOpts || {}, items: res.items?.length || 0 });
         // Warm in-memory cache
         searchCache.set(cacheKey, deepClone(res));
         return Promise.resolve(res);
@@ -434,18 +460,23 @@ export async function fetchSearch(q: string, pageToken?: string, opts?: SearchOp
   // Share in-flight request for the same key
   const inFlight = inFlightSearch.get(cacheKey);
   if (inFlight) {
-    console.log('[YouTube Search] dedup: sharing in-flight request', { q: qSan, pageToken: pageToken || null });
+    console.log('[Search] dedup: sharing in-flight request', { q: qSan, pageToken: pageToken || null, mode });
     return inFlight;
   }
 
   const promise = (async (): Promise<SearchResponse> => {
     try {
-      console.log('[YouTube Search] fetch', { q: qSan, pageToken: pageToken || null, opts: normOpts || {} });
-      const result = await fetchYouTubeDirect(qSan, pageToken, normOpts);
+      console.log('[Search] fetch', { q: qSan, pageToken: pageToken || null, opts: normOpts || {}, mode });
+      let result: SearchResponse;
+      if (hasClientKey) {
+        result = await fetchYouTubeDirect(qSan, pageToken, normOpts);
+      } else {
+        result = await fetchViaProxy(qSan, pageToken, normOpts);
+      }
       // Apply blocklist filter defensively before caching
       result.items = (result.items || []).filter(v => v && v.videoId && !isTitleBlocked(v.title));
       // Log response for debugging
-      console.log('[YouTube Search] response', { q: qSan, nextPageToken: result.nextPageToken || null, items: result.items.length });
+      console.log('[Search] response', { q: qSan, nextPageToken: result.nextPageToken || null, items: result.items.length, mode });
       // Cache and return a deep clone to keep the cached value immutable from callers
       const toCache = deepClone(result);
       searchCache.set(cacheKey, deepClone(toCache));
@@ -455,7 +486,7 @@ export async function fetchSearch(q: string, pageToken?: string, opts?: SearchOp
       return deepClone(toCache);
     } catch (err: any) {
       // Graceful error logging for visibility during development and production
-      console.error('[YouTube Search] Error:', err?.message || err);
+      console.error('[Search] Error:', err?.message || err);
       throw err;
     } finally {
       // Ensure in-flight request is cleaned up

@@ -9,7 +9,7 @@ type Props = {
   onLoadMore?: () => void;
 };
 
-export const VideoGrid: React.FC<Props> = ({ items, loading, onSelect, onLoadMore }) => {
+const VideoGrid: React.FC<Props> = ({ items, loading, onSelect, onLoadMore }) => {
   // Masonry-like responsive grid for video cards
   return (
     <div>

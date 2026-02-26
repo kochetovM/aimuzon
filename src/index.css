@@ -11,3 +11,8 @@ body { @apply bg-background text-text-primary dark:bg-gray-950 dark:text-gray-10
 
 /* Utility classes for containers */
 .container-app { @apply mx-auto max-w-7xl px-4 sm:px-6 lg:px-8; }
+
+.bg-gradient-apple { @apply bg-gradient-to-r from-green-400 to-blue-500; }
+.border-divider { @apply border-gray-200 dark:border-gray-800; }
+.text-text-secondary { @apply text-gray-600 dark:text-gray-400; }
+.shadow-card { @apply shadow-lg rounded-2xl; }
